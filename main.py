@@ -1,17 +1,35 @@
 import argparse
 import os
+import traceback
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
+import torch
 
 from utilities.audio_processor import Transcriber, convert_to_wav_mono_24k
 from utilities.kvoicewalk import KVoiceWalk
+from utilities.kvw_informer import KVW_Informer
 from utilities.pytorch_sanitizer import load_multiple_voices
 from utilities.speech_generator import SpeechGenerator
 
 
 def main():
+    # import config settings
+    kvw_informer = KVW_Informer()
+    kvw_settings = kvw_informer.settings
+    log_view = kvw_settings["preprocessing_logs"]
+    use_cached = kvw_settings["use_cached"]
+    cap_memory = kvw_settings["cap_memory"]
+    cap_memory_frac = kvw_settings["cap_memory_frac"]
+    # After initial download, recommend use cached copies of models == faster load times
+    if use_cached:
+        os.environ['HF_HUB_OFFLINE'] = '1'  # Force offline mode
+        os.environ['TRANSFORMERS_OFFLINE'] = '1'
+    # True: Limits excess memory overhead reservation, benchmarked at ~0.70GB throughout operation, no spikes
+    # Cap_memory_frac = 0.2, can be set 0-1, but recommend no lower than 0.15
+    if cap_memory: torch.cuda.set_per_process_memory_fraction(cap_memory_frac)
+
     parser = argparse.ArgumentParser(description="A random walk Kokoro voice cloner.")
 
     # Common required arguments
@@ -78,6 +96,7 @@ def main():
 
     # Handle target_audio input - convert to mono wav 24K automatically
     if args.target_audio:
+        if log_view is True: kvw_informer.log_gpu_memory("Preprocessing target audio file", log_view)
         try:
             target_audio_path = Path(args.target_audio)
             if target_audio_path.is_file():
@@ -89,6 +108,7 @@ def main():
 
     # Transcribe (Start Mode)
     if args.transcribe_start:
+        if log_view is True: kvw_informer.log_gpu_memory("Transcribing target audio file", log_view)
         try:
             target_path = Path(args.target_audio)
 
@@ -165,7 +185,8 @@ def main():
         if not args.target_text:
             parser.error("--target_text is required when using --test_voice")
 
-        speech_generator = SpeechGenerator()
+        speech_generator = SpeechGenerator(kvw_informer=kvw_informer, target_text=args.target_text,
+                                           other_text=args.other_text)
         audio = speech_generator.generate_audio(args.target_text, args.test_voice)
         sf.write(args.output_name, audio, 24000)
     else:
@@ -175,15 +196,21 @@ def main():
         if not args.target_text:
             parser.error("--target_text is required for random walk mode")
 
+        if log_view is True: kvw_informer.log_gpu_memory("Initializing KVoicewalk", log_view)
         ktb = KVoiceWalk(args.target_audio,
-                        args.target_text,
-                        args.other_text,
-                        args.voice_folder,
-                        args.interpolate_start,
-                        args.population_limit,
+                         args.target_text,
+                         args.other_text,
+                         args.voice_folder,
+                         args.interpolate_start,
+                         args.population_limit,
                          args.starting_voice,
-                         args.output_name)
-        ktb.random_walk(args.step_limit)
-
+                         args.output_name, kvw_informer)
+        try:
+            ktb.random_walk(args.step_limit)
+        except Exception as e:
+            print("FULL TRACEBACK:")
+            traceback.print_exc()
+            print(f"\nERROR: {e}")
+            print(f"ERROR TYPE: {type(e)}")
 if __name__ == "__main__":
     main()

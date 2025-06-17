@@ -1,7 +1,7 @@
 [project]
 name = "kvoicewalk"
 version = "0.1.0"
-description = "Add your description here"
+description = "A randomwalk through Kokoro latent space"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
@@ -12,4 +12,7 @@ dependencies = [
     "soundfile>=0.13.1",
     "torch>=2.7.0",
     "tqdm>=4.67.1",
+    "faster-whisper>=1.1.1",
+    "speechbrain>=1.0.3",
+    "torchaudio>=2.7.0",
 ]

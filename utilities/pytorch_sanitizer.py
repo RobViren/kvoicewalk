@@ -24,7 +24,7 @@ class VoiceLoader:
         # Try safe loading first
         try:
             data = torch.load(file_path, weights_only=True)
-            print(f"✅  Safely Loaded {file_path} with weights_only=True")
+            # print(f"✅  Safely Loaded {file_path} with weights_only=True")
             return data
         except Exception as safe_error:
             print(f"⚠️  Safe loading failed: {safe_error}")
@@ -38,7 +38,7 @@ class VoiceLoader:
                 np.core.multiarray.scalar,
             ]):
                 data = torch.load(file_path)
-                print(f"✅  Safely Loaded {file_path} with numpy globals allowed")
+                # print(f"✅  Safely Loaded {file_path} with numpy globals allowed")
                 return data
         except Exception as numpy_error:
             print(f"⚠️  Numpy-safe loading failed: {numpy_error}")
@@ -127,7 +127,7 @@ class VoiceLoader:
 
     def load_voice_safely(self, file_path: str) -> Optional[torch.Tensor]:
         """Complete safe loading pipeline for voice files"""
-        print(f"Loading voice file: {file_path}")
+        # print(f"Loading voice file: {file_path}")
 
         try:
             # Step 1: Safe load the file
@@ -147,7 +147,7 @@ class VoiceLoader:
             print(f"⏭️  Skipped: {e}")
             return None
 
-    def get_risk_report(self) -> str:
+    def get_risk_report(self) -> str | None:
         """Generate a report of risky files"""
         report = []
 
@@ -157,8 +157,8 @@ class VoiceLoader:
             for file in self.risky_files:
                 report.append(f"  - {file}")
 
-        return "\n".join(report)
-
+            return "\n".join(report)
+        return
 
 # Usage functions for backward compatibility
 def load_voice_safely(file_path: str,
@@ -170,8 +170,7 @@ def load_voice_safely(file_path: str,
 
     # Print report if there were any issues
     report = loader.get_risk_report()
-    if "All files loaded safely!" not in report:
-        print(f"\n{report}")
+    if report: print(f"\n{report}")
 
     return result
 
