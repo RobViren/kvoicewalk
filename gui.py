@@ -1,5 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import os
+import re
 
 
 import queue
@@ -25,6 +26,9 @@ MODE_TEST_VOICE = "Test Voice"
 MODE_TRANSCRIBE_MANY = "Transcribe Many"
 MODE_EXPORT_BIN = "Export Voices Bin"
 MODES = [MODE_RANDOM_WALK, MODE_TEST_VOICE, MODE_TRANSCRIBE_MANY, MODE_EXPORT_BIN]
+PROGRESS_RE = re.compile(
+    r"Progress:\s*step\s+(?P<step>\d+)/(?P<total>\d+)\s*\|.*?elapsed=(?P<elapsed>[0-9.]+)s(?:\s*\|\s*eta=(?P<eta>[0-9.]+)s)?"
+)
 
 
 @dataclass
@@ -34,6 +38,7 @@ class Task:
     args: list[str]
     summary: str
     status: str = "Queued"
+    step_limit: int | None = None
 
 
 class KVoiceWalkGui:
@@ -60,7 +65,7 @@ class KVoiceWalkGui:
         self.output_name_var = tk.StringVar(value="my_new_voice")
         self.population_limit_var = tk.StringVar(value="10")
         self.step_limit_var = tk.StringVar(value="10000")
-        self.log_interval_var = tk.StringVar(value="100")
+        self.log_interval_var = tk.StringVar(value="10")
         self.interpolate_start_var = tk.BooleanVar(value=False)
         self.transcribe_start_var = tk.BooleanVar(value=False)
 
@@ -133,14 +138,30 @@ class KVoiceWalkGui:
         ttk.Checkbutton(config_frame, text="Interpolate Start", variable=self.interpolate_start_var).grid(row=8, column=4, sticky="w", pady=(8, 0))
         ttk.Checkbutton(config_frame, text="Transcribe Start", variable=self.transcribe_start_var).grid(row=8, column=5, sticky="w", pady=(8, 0))
 
+        ttk.Label(config_frame, text="Log Every N Steps").grid(row=9, column=0, sticky="w", pady=(8, 0))
+        ttk.Spinbox(config_frame, from_=1, to=100000, textvariable=self.log_interval_var).grid(row=9, column=1, sticky="ew", padx=(4, 8), pady=(8, 0))
+
         controls = ttk.Frame(config_frame)
-        controls.grid(row=9, column=0, columnspan=6, sticky="ew", pady=(12, 0))
+        controls.grid(row=10, column=0, columnspan=6, sticky="ew", pady=(12, 0))
         controls.columnconfigure((0, 1, 2, 3, 4, 5), weight=1)
 
         ttk.Button(controls, text="Add Task", command=self._add_task).grid(row=0, column=0, sticky="ew", padx=(0, 6))
         ttk.Button(controls, text="Remove Selected", command=self._remove_selected).grid(row=0, column=1, sticky="ew", padx=6)
         ttk.Button(controls, text="Clear Queue", command=self._clear_queue).grid(row=0, column=2, sticky="ew", padx=6)
-        ttk.Button(controls, text="Start Queue", command=self._start_queue).grid(row=0, column=3, sticky="ew", padx=6)
+        tk.Button(
+            controls,
+            text="Start Queue",
+            command=self._start_queue,
+            bg="#1f8e3e",
+            fg="white",
+            activebackground="#166b2e",
+            activeforeground="white",
+            font=("Segoe UI", 10, "bold"),
+            relief=tk.RAISED,
+            bd=2,
+            padx=8,
+            pady=4,
+        ).grid(row=0, column=3, sticky="ew", padx=6)
         ttk.Button(controls, text="Stop Current", command=self._stop_queue).grid(row=0, column=4, sticky="ew", padx=6)
         ttk.Button(controls, text="Clear Log", command=self._clear_log).grid(row=0, column=5, sticky="ew", padx=(6, 0))
 
@@ -151,18 +172,20 @@ class KVoiceWalkGui:
 
         self.task_tree = ttk.Treeview(
             queue_frame,
-            columns=("id", "mode", "status", "summary"),
+            columns=("id", "mode", "status", "eta", "summary"),
             show="headings",
             height=8,
         )
         self.task_tree.heading("id", text="ID")
         self.task_tree.heading("mode", text="Mode")
         self.task_tree.heading("status", text="Status")
+        self.task_tree.heading("eta", text="ETA")
         self.task_tree.heading("summary", text="Summary")
         self.task_tree.column("id", width=60, anchor="center")
         self.task_tree.column("mode", width=140, anchor="center")
         self.task_tree.column("status", width=110, anchor="center")
-        self.task_tree.column("summary", width=800, anchor="w")
+        self.task_tree.column("eta", width=120, anchor="center")
+        self.task_tree.column("summary", width=680, anchor="w")
         self.task_tree.grid(row=0, column=0, sticky="nsew")
 
         tree_scroll = ttk.Scrollbar(queue_frame, orient="vertical", command=self.task_tree.yview)
@@ -219,6 +242,8 @@ class KVoiceWalkGui:
         device = self.device_var.get().strip() or "auto"
         args += ["--device", device]
 
+        step_limit: int | None = None
+
         output_name = self.output_name_var.get().strip()
         if output_name:
             args += ["--output_name", output_name]
@@ -248,15 +273,21 @@ class KVoiceWalkGui:
                 args += ["--starting_voice", starting_voice]
 
             args += ["--population_limit", self.population_limit_var.get().strip() or "10"]
-            args += ["--step_limit", self.step_limit_var.get().strip() or "10000"]
-            args += ["--log_interval", self.log_interval_var.get().strip() or "100"]
+            step_limit = int(self.step_limit_var.get().strip() or "10000")
+            if step_limit < 1:
+                raise ValueError("Step Limit must be at least 1")
+            log_interval = int(self.log_interval_var.get().strip() or "10")
+            if log_interval < 1:
+                raise ValueError("Log Every N Steps must be at least 1")
+            args += ["--step_limit", str(step_limit)]
+            args += ["--log_interval", str(log_interval)]
 
             if self.interpolate_start_var.get():
                 args.append("--interpolate_start")
             if self.transcribe_start_var.get():
                 args.append("--transcribe_start")
 
-            summary = f"audio={Path(target_audio).name}, output={output_name or 'my_new_voice'}, device={device}, log_interval={self.log_interval_var.get().strip() or '100'}"
+            summary = f"audio={Path(target_audio).name}, output={output_name or 'my_new_voice'}, device={device}, log_interval={log_interval}"
 
         elif mode == MODE_TEST_VOICE:
             test_voice = self.test_voice_var.get().strip()
@@ -294,7 +325,7 @@ class KVoiceWalkGui:
         else:
             raise ValueError("Unsupported mode")
 
-        task = Task(task_id=self.next_task_id, mode=mode, args=args, summary=summary)
+        task = Task(task_id=self.next_task_id, mode=mode, args=args, summary=summary, step_limit=step_limit)
         self.next_task_id += 1
         return task
 
@@ -306,7 +337,7 @@ class KVoiceWalkGui:
             return
 
         self.tasks.append(task)
-        self.task_tree.insert("", tk.END, iid=str(task.task_id), values=(task.task_id, task.mode, task.status, task.summary))
+        self.task_tree.insert("", tk.END, iid=str(task.task_id), values=(task.task_id, task.mode, task.status, "-", task.summary))
         self._append_log(f"Queued task #{task.task_id}: {task.mode} ({task.summary})")
 
     def _remove_selected(self) -> None:
@@ -349,9 +380,30 @@ class KVoiceWalkGui:
         iid = str(task_id)
         if self.task_tree.exists(iid):
             values = list(self.task_tree.item(iid, "values"))
-            if len(values) >= 4:
+            if len(values) >= 5:
                 values[2] = status
                 self.task_tree.item(iid, values=values)
+        if status in {"Done", "Failed", "Stopped"}:
+            self._set_task_eta(task_id, "-")
+
+    def _set_task_eta(self, task_id: int, eta_text: str) -> None:
+        iid = str(task_id)
+        if self.task_tree.exists(iid):
+            values = list(self.task_tree.item(iid, "values"))
+            if len(values) >= 5:
+                values[3] = eta_text
+                self.task_tree.item(iid, values=values)
+
+    @staticmethod
+    def _format_eta(seconds: float) -> str:
+        seconds = max(0, int(round(seconds)))
+        hours, rem = divmod(seconds, 3600)
+        minutes, secs = divmod(rem, 60)
+        if hours:
+            return f"{hours}h {minutes}m {secs}s"
+        if minutes:
+            return f"{minutes}m {secs}s"
+        return f"{secs}s"
 
     def _start_queue(self) -> None:
         if self.runner_thread and self.runner_thread.is_alive():
@@ -390,6 +442,7 @@ class KVoiceWalkGui:
 
             task = next_task
             self.events.put(("task_status", task.task_id, "Running"))
+            self.events.put(("task_eta", task.task_id, "Estimating..."))
             cmd = [sys.executable, "main.py", *task.args]
             self.events.put(("log", f"\n=== Running task #{task.task_id}: {' '.join(cmd)}"))
 
@@ -415,7 +468,22 @@ class KVoiceWalkGui:
 
                 assert self.current_process.stdout is not None
                 for line in self.current_process.stdout:
-                    self.events.put(("log", line.rstrip("\n")))
+                    line_text = line.rstrip("\n")
+                    self.events.put(("log", line_text))
+                    if task.mode == MODE_RANDOM_WALK:
+                        match = PROGRESS_RE.search(line_text)
+                        if match:
+                            completed = int(match.group("step"))
+                            total = int(match.group("total"))
+                            elapsed = float(match.group("elapsed"))
+                            eta_group = match.group("eta")
+                            if eta_group is not None:
+                                eta_seconds = float(eta_group)
+                            elif completed > 0 and total >= completed:
+                                eta_seconds = (elapsed / completed) * (total - completed)
+                            else:
+                                eta_seconds = 0.0
+                            self.events.put(("task_eta", task.task_id, self._format_eta(eta_seconds)))
                     if self.stop_requested and self.current_process.poll() is None:
                         try:
                             self.current_process.terminate()
@@ -433,15 +501,18 @@ class KVoiceWalkGui:
 
             if self.stop_requested:
                 self.events.put(("task_status", task.task_id, "Stopped"))
+                self.events.put(("task_eta", task.task_id, "-"))
                 self.events.put(("log", f"Task #{task.task_id} stopped"))
                 self.events.put(("queue_state", "stopped"))
                 break
 
             if return_code == 0:
                 self.events.put(("task_status", task.task_id, "Done"))
+                self.events.put(("task_eta", task.task_id, "-"))
                 self.events.put(("log", f"Task #{task.task_id} finished successfully"))
             else:
                 self.events.put(("task_status", task.task_id, "Failed"))
+                self.events.put(("task_eta", task.task_id, "-"))
                 self.events.put(("log", f"Task #{task.task_id} failed with exit code {return_code}"))
 
     def _poll_events(self) -> None:
@@ -457,6 +528,9 @@ class KVoiceWalkGui:
             elif kind == "task_status":
                 _, task_id, status = event
                 self._set_task_status(task_id, status)
+            elif kind == "task_eta":
+                _, task_id, eta_text = event
+                self._set_task_eta(task_id, eta_text)
             elif kind == "queue_state":
                 state = event[1]
                 if state == "completed":
@@ -475,10 +549,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-

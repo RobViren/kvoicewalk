@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import os
 from pathlib import Path
 
@@ -60,7 +60,7 @@ def main():
         "--log_interval",
         type=int,
         help="How often to emit progress logs for non-interactive runs",
-        default=100,
+        default=10,
     )
     parser.add_argument(
         "--output_name",
@@ -234,5 +234,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
